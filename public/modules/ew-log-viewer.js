@@ -5872,6 +5872,21 @@ Fe.styles = Me`
       input:checked + .checkmark:not(.indeterminate):not(.disabled) {
         background-color: var(--se-primary, #3dcd58);
       }
+    /* Ultra desktop: reduzir padding e gaps para itens da legenda */
+    @media screen and (min-width: 1200px) {
+	    label {
+	      padding: 0 6px; /* sem espaço vertical */
+	      column-gap: 0; /* sem espaço entre checkbox e texto */
+	    }
+      .label {
+	      gap: 0; /* texto e sufixo colados */
+	      line-height: 1;
+      }
+      .checkmark {
+	      width: 16px;
+	      height: 16px;
+      }
+    }
 	`;
 Xt([
   Mi()
@@ -5930,6 +5945,9 @@ let W = class extends J {
         this.setSeriesVisibility(n);
       }
     };
+    // Conserva la legenda originale per ripristinarla su schermi larghi
+    this._originalLegendPosition = this.legendPosition;
+    this._forcedMobileLegend = false;
   }
   getVisibilitiesFromCheckboxes() {
     var e;
@@ -5938,8 +5956,71 @@ let W = class extends J {
       [i.dataset.setIndex]: i.checked
     }), {});
   }
+  connectedCallback() {
+    super.connectedCallback();
+    this._handleResize = () => {
+      const isNarrow = window.innerWidth <= 1199;
+      try {
+        // Alterna dinamicamente il selettore di intervallo
+        if (this.chart) {
+          const currentShowRange = this.chart.getOption && this.chart.getOption('showRangeSelector');
+          if (typeof this.chart.updateOptions === 'function' && currentShowRange !== isNarrow) {
+            // Dygraphs a volte richiede ricostruzione completa quando si abilita il selettore; proviamo prima l'aggiornamento semplice
+            try {
+              this.chart.updateOptions({ showRangeSelector: isNarrow });
+            } catch (err) {
+              console.warn('Falha ao atualizar showRangeSelector dinamicamente, recriando gráfico...', err);
+              // Ricreare mantenendo la finestra corrente
+              const windowState = this.chart.xAxisRange && this.chart.xAxisRange();
+              const src = this.chart.file_ || this.chart.rawData_ || this.chart.rawData;
+              const opts = { ...this.chart.getOption ? this.chart.getOption() : {}, showRangeSelector: isNarrow };
+              try {
+                this.chart.destroy();
+                this.chart = new v(this._chartContainer, src, opts);
+                windowState && this.chart.updateOptions({ dateWindow: windowState });
+              } catch (re) {
+                console.warn('Recriação do gráfico falhou', re);
+              }
+            }
+          }
+        }
+        // Alterna la posizione della legenda
+        if (isNarrow && !this._forcedMobileLegend) {
+          this._originalLegendPosition = this.legendPosition;
+          this.legendPosition = 'top';
+          this._forcedMobileLegend = true;
+          this.requestUpdate && this.requestUpdate();
+        } else if (!isNarrow && this._forcedMobileLegend) {
+          this.legendPosition = this._originalLegendPosition || 'side';
+          this._forcedMobileLegend = false;
+          this.requestUpdate && this.requestUpdate();
+        }
+        // Ridimensionamento base
+        if (this.chart && this._chartContainer) {
+          const rect = this._chartContainer.getBoundingClientRect();
+          if (typeof this.chart.resize === 'function') {
+            this.chart.resize(rect.width, rect.height);
+          } else if (typeof this.chart.updateOptions === 'function') {
+            this.chart.updateOptions({});
+          }
+          // Regolare la densità delle etichette in base alla larghezza
+          if (typeof this.chart.updateOptions === 'function') {
+            this.chart.updateOptions({ axes: { x: { pixelsPerLabel: isNarrow ? 90 : 70 } } });
+          }
+          this._sharpenRangeSelector();
+        }
+      } catch (e) {
+        console.warn('Resize handling failed', e);
+      }
+    };
+    window.addEventListener('resize', this._handleResize);
+    // Eseguire subito per applicare lo stato iniziale
+    this._handleResize();
+  }
   disconnectedCallback() {
-    super.disconnectedCallback(), this.chart && this.chart.destroy();
+    window.removeEventListener('resize', this._handleResize);
+    super.disconnectedCallback();
+    this.chart && this.chart.destroy();
   }
   render() {
     const e = Object.entries(this.series);
@@ -6063,25 +6144,80 @@ let W = class extends J {
     if (this.currentFile = Ot(e), this._chartContainer)
       try {
         const t = this.drawChartCallback;
+        const isNarrow = window.matchMedia('(max-width: 1199px)').matches; // Fino a 1200px usiamo il layout "mobile"
+        // Forza la legenda in alto per schermi stretti per favorire l'impilamento verticale
+        if (isNarrow && this.legendPosition !== 'top') {
+          this.legendPosition = 'top';
+        }
+        const effectiveLegendPosition = this.legendPosition;
+        const baseOptions = {
+          legend: "always",
+          title: this.chartTitle,
+          hideOverlayOnMouseOut: !1,
+          labelsDiv: this._legendContainer,
+          delimiter: ";",
+          labelsSeparateLines: effectiveLegendPosition === "side",
+          strokeWidth: 1.3,
+          drawCallback: t
+        };
+        // Regolazioni specifiche per mobile per evitare un aspetto schiacciato.
+        if (isNarrow) {
+          baseOptions.showRangeSelector = true; // Permette di selezionare un intervallo più piccolo
+          baseOptions.animatedZooms = true;
+          // Non sovrascrivere gli assi per non perdere la formattazione predefinita; li applicheremo dopo.
+        }
         this.chart = new v(
           this._chartContainer,
           `${window.location.origin}/${e}?t=${Date.now()}`,
-          {
-            legend: "always",
-            title: this.chartTitle,
-            hideOverlayOnMouseOut: !1,
-            labelsDiv: this._legendContainer,
-            delimiter: ";",
-            labelsSeparateLines: this.legendPosition === "side",
-            strokeWidth: 1.3,
-            drawCallback: t
-          }
-        ), this.chart.ready(() => {
+          baseOptions
+        );
+        this.chart.ready(() => {
           this.isLoading = !1;
-        }), console.log(this.chart);
+          // Dopo il caricamento, se mobile e con molti punti, riduce la finestra mostrata.
+          if (isNarrow) {
+            try {
+              const rows = this.chart.numRows && this.chart.numRows();
+              if (rows && rows > 0) {
+                const containerWidth = this._chartContainer.getBoundingClientRect().width;
+                const targetPoints = Math.max(30, Math.floor(containerWidth / 6)); // ~1 punto ogni 6px
+                if (rows > targetPoints) {
+                  const startIndex = rows - targetPoints;
+                  const start = this.chart.getValue(startIndex, 0);
+                  const end = this.chart.getValue(rows - 1, 0);
+                  this.chart.updateOptions({ dateWindow: [start, end] });
+                }
+              }
+              // Regola la spaziatura delle etichette senza perdere altre opzioni
+              this.chart.updateOptions({ axes: { x: { pixelsPerLabel: 90 } } });
+              // Garantire la legenda in alto dopo il caricamento se necessario
+              if (this.legendPosition !== 'top') {
+                this.legendPosition = 'top';
+              }
+            } catch (err) {
+              console.warn('Falha ao ajustar janela de datas para mobile', err);
+            }
+          }
+          // Migliora la nitidezza del selettore di intervallo sui dispositivi ad alta densità
+          this._sharpenRangeSelector();
+        });
+        console.log(this.chart);
       } catch (t) {
         this.isLoading = !1, console.error(t), alert("An error occured.");
       }
+  }
+  // Regola i canvas del selettore di intervallo per evitare sfocature su mobile/retina.
+  _sharpenRangeSelector() {
+    try {
+      if (!this.chart) return;
+      // Strategia semplificata: garantisce solo che gli stili di nitidezza siano presenti.
+      const canvases = this._chartContainer?.querySelectorAll('.dygraph-rangesel-bgcanvas, .dygraph-rangesel-fgcanvas');
+      if (!canvases || canvases.length === 0) return;
+      canvases.forEach(c => {
+        c.style.imageRendering = 'crisp-edges';
+      });
+    } catch (e) {
+      console.warn('Não foi possível melhorar nitidez do range selector', e);
+    }
   }
   static getSeriesFromChart(e) {
     var t;
@@ -6178,19 +6314,97 @@ W.styles = Me`
         flex: 1;
         width: 100%;
 	  }
+      /* Base legend & chart layout */
       .chart {
         flex: 1;
         height: 100%;
-        width: calc(100% - 200px);
+        width: 100%; /* Allow flex to handle remaining width; side legend reserves space via flex-basis */
+        min-height: 320px;
+        box-sizing: border-box;
+      }
+      .legend {
+        display: flex;
+        flex-direction: column;
+        gap: 4px; /* valor padrão, será reduzido no desktop */
+        font-size: clamp(11px, 2.2vw, 14px);
+        line-height: 1.15;
+        max-height: 100%;
+        box-sizing: border-box;
       }
       .legend-container {
         flex: 0 1;
       }
       .legend.legend-top {
-
+        width: 100%;
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: flex-start;
       }
       .legend.legend-side {
-        flex-basis: 200px;
+        flex-basis: 200px; /* será ajustado para telas maiores */
+        overflow-y: auto;
+        scrollbar-width: thin;
+      }
+      /* When legend is on top (style attribute forces column-reverse), ensure chart fills width */
+      .chart-container[style*="column-reverse"] .chart {
+        width: 100%;
+      }
+      /* Small screens: stack legend & chart, wrap legend items horizontally */
+      @media screen and (max-width: 1200px) {
+        .chart-container {
+          flex-direction: column;
+        }
+        .legend.legend-side {
+          flex-basis: auto;
+          width: 100%;
+          order: 1; /* put legend above chart for readability */
+          flex-direction: row;
+          flex-wrap: wrap;
+          overflow-x: auto;
+          max-height: none;
+        }
+        .chart {
+          min-height: 55vh; /* give chart sufficient vertical space on mobile */
+        }
+        .fields {
+          flex-direction: column;
+        }
+      }
+      /* Nitidez do range selector em qualquer tela */
+      .dygraph-rangesel-bgcanvas,
+      .dygraph-rangesel-fgcanvas {
+        image-rendering: crisp-edges;
+        image-rendering: -webkit-optimize-contrast;
+      }
+      .dygraph-rangesel-zoomhandle {
+        will-change: transform;
+        box-shadow: 0 0 2px rgba(0,0,0,0.35);
+      }
+      /* Medium screens: allow side legend to shrink if needed */
+      @media screen and (min-width: 640px) and (max-width: 991px) {
+        .legend.legend-side {
+          flex-basis: 160px;
+        }
+      }
+      /* Desktop grande: reduzir ainda mais o espaço vertical entre itens e largura base */
+      @media screen and (min-width: 992px) {
+        .legend {
+          gap: 2px;
+          line-height: 1.05;
+        }
+        .legend.legend-side {
+          flex-basis: 170px;
+        }
+      }
+      /* Ultra desktop: comprimir ainda mais o espaçamento da legenda e reduzir a coluna */
+      @media screen and (min-width: 1200px) {
+        .legend {
+          gap: 0; /* sem espaço entre linhas */
+          line-height: 1; /* linhas coladas */
+        }
+        .legend.legend-side {
+          flex-basis: 150px;
+        }
       }
       .actions {
         flex: 1 1 auto;
@@ -6268,9 +6482,10 @@ W.styles = Me`
           column-gap: 1rem;
         }        
       }
-      @media screen and (min-width: 768px) {
+      /* Mantém layout em coluna até 1200px; só a partir daí usamos linha na header */
+      @media screen and (min-width: 1200px) {
         .header {
-			flex-direction: row;
+            flex-direction: row;
         }
         ew-dialog#download-dialog .download-dialog-content,
         ew-dialog#filter-dialog .filter-dialog-content {
