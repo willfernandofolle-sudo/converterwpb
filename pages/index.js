@@ -378,7 +378,11 @@ function addEnterKeyHintToTextInputs(htmlContent) {
       if (match.includes('enterkeyhint')) {
         return match;
       }
-      // Adiciona enterkeyhint="done" antes do fechamento da tag
+      // Mantem a barra no lugar correto quando a tag e autocontida.
+      if (/\/\s*>$/.test(match)) {
+        return match.replace(/\s*\/\s*>$/, ' enterkeyhint="done" />');
+      }
+
       return match.replace(/\s*>$/, ' enterkeyhint="done">');
     }
   );
