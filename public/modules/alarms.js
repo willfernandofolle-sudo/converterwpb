@@ -23,7 +23,7 @@
                     }
                 });
 
-                if (alarmStatusInput && alarmStatusInput.value === "active") {
+                if (alarmStatusInput && (alarmStatusInput.value === "active" || alarmStatusInput.value === "resettable")) {
                     isVisible = true;
                 }
 
