@@ -5,7 +5,7 @@ import { ZIP_MODULES, AUTO_INCLUDE_MODULES, buildDefaultModuleSelection } from "
 
 const TEXT_EXTENSIONS = [".html", ".css", ".js", ".json", ".txt", ".svg"];
 
-const EXCLUDED_FILES = new Set(["404.html", "404.css"]);
+const EXCLUDED_FILES = new Set(["404.html", "404.css", ".env", ".env.example", ".gitignore"]);
 
 const OPTIONAL_MODULE_ASSETS = {
   alarms: [
@@ -357,9 +357,10 @@ function isTextFile(filePath) {
 }
 
 function isExcludedFile(filePath) {
-  const normalized = filePath.replace(/\\/g, "/");
-  const fileName = normalized.split("/").pop()?.toLowerCase();
-  return EXCLUDED_FILES.has(fileName);
+  const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+  const pathParts = normalized.split("/");
+  const fileName = pathParts.pop();
+  return pathParts.includes("locales") || EXCLUDED_FILES.has(fileName);
 }
 
 function removeExternalFontLinksFromHtml(htmlContent) {
@@ -462,20 +463,15 @@ export default function Home() {
 
       let excludedFilesCount = 0;
       for (const [path, zipEntry] of Object.entries(content.files)) {
-        const excludedFile = isExcludedFile(path);
-        let newPath = path;
-
-        if (!excludedFile) {
-          newPath = path.includes("public/") ? path.replace("public/", "img/") : path;
-        }
-
-        if (zipEntry.dir) {
-          newZip.folder(newPath);
+        if (isExcludedFile(path)) {
+          if (!zipEntry.dir) excludedFilesCount += 1;
           continue;
         }
 
-        if (excludedFile) {
-          excludedFilesCount += 1;
+        const newPath = path.includes("public/") ? path.replace("public/", "img/") : path;
+
+        if (zipEntry.dir) {
+          newZip.folder(newPath);
           continue;
         }
 
@@ -534,7 +530,7 @@ export default function Home() {
       window.URL.revokeObjectURL(url);
 
       setStatus(
-        `ZIP processed successfully. Extra files: ${filesToAdd.length}. 404 files removed: ${excludedFilesCount}.`
+        `ZIP processed successfully. Extra files: ${filesToAdd.length}. Files removed (404, locales, .env, .env.example, .gitignore): ${excludedFilesCount}.`
       );
     } catch (error) {
       console.error("Error processing ZIP:", error);
